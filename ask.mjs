@@ -21,11 +21,12 @@ let msgList = [
 //   { role: "user", content: "你来猜测我的性别,可以向我提问必要信息" },
 // ];
 
-const callLLM = async (messages) => {
+const callLLM = async (messages, { signal } = {}) => {
   // 网络断开、DNS 失败、超时这类"根本没拿到响应"的情况, fetch 会直接抛异常
   let res;
   try {
     res = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
+      signal,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -42,7 +43,9 @@ const callLLM = async (messages) => {
       }),
     });
   } catch (e) {
-    throw new Error("网络错误", { cause: e });
+    const error = new Error("网络错误", { cause: e });
+    error.kind = "network";
+    throw error;
   }
   // console.log("HTTP 响应:", res);
   const resText = await res.text(); // .text() 读取响应体, 并把它当作字符串返回
@@ -50,9 +53,17 @@ const callLLM = async (messages) => {
   // 因此, 走到这个分支说明 服务器有响应, 但返回了非 2xx 的失败状态码
   if (!res.ok) {
     console.error("请求失败:", resText);
-    throw new Error("请求失败", { cause: { status: res.status, statusText: res.statusText } });
+    const error = new Error("请求失败", { cause: { status: res.status, statusText: res.statusText } });
+    error.kind = "http";
+    throw error;
   }
-  return JSON.parse(resText);
+  try {
+    return JSON.parse(resText);
+  } catch (e) {
+    const error = new Error("响应解析失败", { cause: e });
+    error.kind = "response_parse";
+    throw error;
+  }
 };
 
 const callLLMStream = async (messages) => {

@@ -6,6 +6,7 @@ const runLoop = async ({
   maxRequestRounds = 5,
   maxRetryRounds = 5,
   sleep = async (ms) => new Promise(r => setTimeout(r, ms)),
+  requestTimeoutMs = 30000,
   verbose = false,
 }) => {
   let msgList = [...messages];
@@ -15,6 +16,8 @@ const runLoop = async ({
   let requestRounds = 0;
   let retryRounds = 0;
   let stopReason;
+  let errorDetail = null;
+  let stopDetail = null;
 
   while (!stopFlag) {
     if (requestRounds >= maxRequestRounds) {
@@ -25,30 +28,92 @@ const runLoop = async ({
     }
 
     let responseResult;
+    const controller = new AbortController();
     try {
       if (verbose) console.log("------------ 发起第", requestRounds+1, "轮请求 ------------\n", msgList);
-      responseResult = await callLLM(msgList);
+
+      const timer = setTimeout(() => {
+        controller.abort();
+      }, requestTimeoutMs);
+      try {
+        responseResult = await callLLM(msgList, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+
       requestRounds += 1;
     } catch (e) {
-      if (e.cause?.status === 429) {
+      if (controller.signal.aborted) {
+        stopReason = "request_timeout";
+        errorDetail = {
+          kind: "timeout",
+          message: `模型请求超过 ${requestTimeoutMs}ms`,
+          status: null,
+        };
+        stopFlag = true;
+        break;
+      } else if (e.cause?.status === 429) {
         if (retryRounds >= maxRetryRounds) {
-          console.warn("警告:请求过于频繁且超过最大重试次数"); // 但设置 3s 方便调试
+          console.warn("警告:请求过于频繁且超过最大重试次数");
           stopReason = "retry_exhausted";
+          errorDetail = {
+            kind: "http",
+            message: e.message,
+            status: e.cause?.status ?? null
+          };
           break;
         }
-        console.warn("警告:请求过于频繁，过 3s 后重试"); // 但设置 3s 方便调试
-        await sleep(3000);
+        const delayMs = Math.min(1000 * 2 ** retryRounds, 8000);
+        console.warn(`警告:请求过于频繁，${delayMs}ms 后重试`);
+        await sleep(delayMs);
         retryRounds += 1;
         continue;
       } else if (e.cause?.status === 400) {
         console.warn("警告:请求参数错误，检查输入");
         stopFlag = true;
         stopReason = "http_400";
+        errorDetail = {
+          kind: "http",
+          message: e.message,
+          status: e.cause?.status ?? null
+        };
+        break;
+      } else if (e.kind === "network") {
+        stopFlag = true;
+        stopReason = "network_error";
+        errorDetail = {
+          kind: e.kind ?? "unknown",
+          message: e.message,
+          status: e.cause?.status ?? null
+        };
+        break;
+      } else if (e.kind === "http") {
+        stopFlag = true;
+        stopReason = "http_error";
+        errorDetail = {
+          kind: e.kind ?? "unknown",
+          message: e.message,
+          status: e.cause?.status ?? null
+        };
+        break;
+      } else if (e.kind === "response_parse") {
+        stopFlag = true;
+        stopReason = "response_parse_error";
+        errorDetail = {
+          kind: e.kind ?? "unknown",
+          message: e.message,
+          status: e.cause?.status ?? null
+        };
         break;
       } else {
         console.error("警告:其他错误:", e);
         stopFlag = true;
         stopReason = "other_error";
+        errorDetail = {
+          kind: "unknown",
+          message: e.message,
+          status: e.cause?.status ?? null
+        };
         break;
       }
     }
@@ -89,17 +154,32 @@ const runLoop = async ({
         if (verbose) console.log("*** ", tool_call.function.name, "工具调用结果:", result);
         msgList.push({ ...rawMsg, content: result });
       }
+    } else if (choice.finish_reason === "length") {
+      stopReason = "output_limit";
+      stopFlag = true;
+      break;
+    } else if (choice.finish_reason === 'sensitive') {
+      stopReason = "sensitive";
+      stopFlag = true;
+      break;
+    } else if (choice.finish_reason === 'model_context_window_exceeded') {
+      stopReason = "model_context_window_exceeded";
+      stopFlag = true;
+      break;
     } else {
       console.warn("警告:返回异常 finish_reason, 停止循环");
       stopFlag = true;
-      stopReason = "other_error";
+      stopReason = "unexpected_finish_reason";
+      stopDetail = {
+        finishReason: choice.finish_reason
+      };
       break;
     }
   }
 
   if (verbose) console.log("循环结束, 输入 token:", totalPromptTokens);
   if (verbose) console.log("循环结束, 输出 token:", totalCompletionTokens);
-  return { messages: msgList, stopReason, rounds: requestRounds, retries: retryRounds, totalPromptTokens, totalCompletionTokens };
+  return { messages: msgList, stopReason, errorDetail, stopDetail, rounds: requestRounds, retries: retryRounds, totalPromptTokens, totalCompletionTokens };
 };
 
 export default runLoop;
