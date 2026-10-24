@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { resolveInRoot } from "./guard.mjs";
 
-export async function listDirTool(dirPath) {
+export async function listDirTool({ path: dirPath }) {
   try {
     const resolvedPath = await resolveInRoot(dirPath);
     if (!resolvedPath) return "[工具错误] 目录路径越界: " + dirPath;

@@ -1,6 +1,7 @@
-import { toolImpls } from "./tools/index.mjs";
+import { tools, toolImpls } from "./tools/index.mjs";
 import { mergeToolCallDeltas } from "./stream.mjs";
 import runLoop from "./loop.mjs";
+import { validateParams } from "./validate-params.mjs";
 
 const apiKey = process.env.ZHIPU_API_KEY;
 if (!apiKey) {
@@ -12,37 +13,6 @@ console.log("开始执行");
 
 const MAX_REQUEST_ROUNDS = 5;
 const MAX_RETRY_ROUNDS = 5;
-
-const tools = [
-  {
-    "type": "function",
-    "function": {
-      "name": "list_dir",
-      "description": "列举指定目录下的文件列表",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "path": { "type": "string", "description": "目录路径,例如:/home/user" },
-        },
-        "required": ["path"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "read_file",
-      "description": "读取指定文件的内容",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "path": { "type": "string", "description": "文件路径,例如:/home/user/test.txt" }
-        },
-        "required": ["path"]
-      }
-    }
-  }
-];
 
 let msgList = [
   { role: "user", content: "当前目录下有几个md文件" },
@@ -177,17 +147,13 @@ const singleToolCall = async (tool_call) => {
   let params = {};
   try {
     params = JSON.parse(tool_call.function.arguments);
-    const requiredParams = tools[fnIndex]?.function?.parameters?.required;
-    // console.log("requiredParams:", requiredParams);
-    const missingParams = requiredParams?.filter(p => !params[p]);
-    if (missingParams?.length > 0) {
-      console.error("缺少必填参数:", missingParams);
-      return "工具调用失败 - 缺少必填参数: " + missingParams.join(", ");
-    }
   } catch (e) {
     console.error("params解析失败:", e);
     return "工具调用失败 - params解析失败: " + e.message;
   }
+
+  const validateParamsResult = validateParams(params, tools[fnIndex]);
+  if (validateParamsResult !== null) return validateParamsResult;
 
   const toolFn = toolImpls[tool_call.function.name];
   if (!toolFn) {
@@ -195,7 +161,7 @@ const singleToolCall = async (tool_call) => {
     return "工具调用失败 - 工具未注册实现: " + tool_call.function.name;
   }
 
-  return await toolFn(params.path);
+  return await toolFn(params);
 };
 
 // const data = await callLLMStream(msgList);

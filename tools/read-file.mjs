@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolveInRoot } from "./guard.mjs";
 
-export async function readFileTool(filePath) {
+export async function readFileTool({ path: filePath }) {
   try {
     const resolvedPath = await resolveInRoot(filePath);
     if (!resolvedPath) return "[工具错误] 文件路径越界: " + filePath;
