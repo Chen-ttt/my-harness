@@ -181,7 +181,30 @@ const runLoop = async ({
       } else if (choice.finish_reason === "tool_calls" && choice.message?.tool_calls?.length > 0) {
         for (const tool_call of choice.message?.tool_calls) {
           const rawMsg = { role: "tool", tool_call_id: tool_call.id, content: "" };
-          const result = await singleToolCall(tool_call);
+          let result;
+          try {
+            totalTaskController.signal.throwIfAborted(); // 已取消，就不启动工具
+            result = await singleToolCall(tool_call, { signal: totalTaskController.signal });
+            totalTaskController.signal.throwIfAborted(); // 工具迟到返回，也不继续处理结果
+          } catch (e) {
+            if (totalTaskController.signal.aborted) {
+              // 三条路径会进入的取消处理：
+              // 1. 开始前就已取消。
+              // 2. 工具在等待期间响应取消并抛错。
+              // 3. 工具忽略取消，后续在返回时才发现任务已经取消。
+              console.log(totalTaskController.signal.reason.message);
+              stopReason = totalTaskController.signal.reason.message;
+              errorDetail = {
+                kind: "timeout",
+                message: totalTaskController.signal.reason.message,
+                status: null,
+              };
+              stopFlag = true;
+              break;
+            }
+            console.error("工具调用出错:", e);
+            throw e; // 不认识的错误继续向上传播
+          }
           if (verbose) console.log("*** ", tool_call.function.name, "工具调用结果:", result);
           msgList.push({ ...rawMsg, content: result });
         }

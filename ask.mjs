@@ -147,7 +147,7 @@ const callLLMStream = async (messages) => {
   };
 };
 
-const singleToolCall = async (tool_call) => {
+const singleToolCall = async (tool_call, { signal } = {}) => {
   const fnIndex = tools.findIndex(tool => tool.function.name === tool_call.function.name);
   // console.log("fnIndex:", fnIndex);
 
@@ -172,7 +172,7 @@ const singleToolCall = async (tool_call) => {
     return "工具调用失败 - 工具未注册实现: " + tool_call.function.name;
   }
 
-  return await toolFn(params);
+  return await toolFn(params, { signal });
 };
 
 // const data = await callLLMStream(msgList);
